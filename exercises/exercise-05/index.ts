@@ -64,11 +64,19 @@ function logPerson(person: Person) {
     );
 }
 
-function filterPersons(persons: Person[], personType: string, criteria: unknown): unknown[] {
+function getObjectKeys(criteria: { [K in keyof Omit<User, 'type'>]?: Omit<User, 'type'>[K] }): (keyof Omit<User, 'type'>)[];
+function getObjectKeys(criteria: { [K in keyof Omit<Admin, 'type'>]?: Omit<Admin, 'type'>[K] }): (keyof Omit<Admin, 'type'>)[];
+function getObjectKeys(criteria: object): string[] {
+    return Object.keys(criteria);
+}
+
+function filterPersons(persons: Person[], personType: 'admin', criteria: { [K in keyof Omit<Admin, 'type'>]?: Omit<Admin, 'type'>[K] }): Admin[];
+function filterPersons(persons: Person[], personType: 'user', criteria: { [K in keyof Omit<User, 'type'>]?: Omit<User, 'type'>[K] }): User[];
+function filterPersons(persons: any[], personType: string, criteria: any): any[] {
     return persons
         .filter((person) => person.type === personType)
         .filter((person) => {
-            let criteriaKeys = Object.keys(criteria) as (keyof Person)[];
+            let criteriaKeys = getObjectKeys(criteria);
             return criteriaKeys.every((fieldName) => {
                 return person[fieldName] === criteria[fieldName];
             });
