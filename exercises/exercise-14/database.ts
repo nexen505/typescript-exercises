@@ -38,10 +38,8 @@ interface FindOptions<T> {
     projection?: Projection<T>;
 }
 
-interface PipelineOperator<T extends object, R extends object> {
-    readonly arr: T[];
-
-    get(): R[];
+interface PipelineOperator<T extends object = object, R extends object = object> {
+    get(): (arr: T[]) => R[]
 }
 
 class QueryChecker<T extends object> {
@@ -101,23 +99,21 @@ class QueryChecker<T extends object> {
 }
 
 class Filter<T extends object> implements PipelineOperator<T, T> {
-    constructor(readonly arr: T[],
-                protected readonly query: Query<T>,
+    constructor(protected readonly query: Query<T>,
                 protected readonly fullTextSearchFieldNames: (keyof T)[]) {
     }
 
-    get(): T[] {
-        return this.arr.filter((elm: T): boolean => new QueryChecker(elm, this.query, this.fullTextSearchFieldNames).isOk());
+    get(): (arr: T[]) => T[] {
+        return arr => arr.filter((elm: T): boolean => new QueryChecker(elm, this.query, this.fullTextSearchFieldNames).isOk());
     }
 }
 
 class Sorter<T extends object> implements PipelineOperator<T, T> {
 
-    constructor(readonly arr: T[],
-                readonly sort: Sort<T>) {
+    constructor(readonly sort: Sort<T>) {
     }
 
-    get(): T[] {
+    get(): (arr: T[]) => T[] {
         const comparatorFactory = (key: keyof T, sorter: 1 | -1): Comparator<T> => (a: T, b: T): number => {
             if (typeof a[key] === 'number' && typeof b[key] === 'number') {
                 return (Number(a[key]) - Number(b[key])) * sorter;
@@ -132,7 +128,7 @@ class Sorter<T extends object> implements PipelineOperator<T, T> {
         const comparators: ReadonlyArray<Comparator<T>> = (Object.entries(this.sort) as [ keyof T, 1 | -1 ][])
             .map(([ key, sorter ]: [ keyof T, 1 | -1 ]) => comparatorFactory(key, sorter));
 
-        return this.arr.sort((a: T, b: T): number => {
+        return arr => arr.sort((a: T, b: T): number => {
             for (let comparator of comparators) {
                 const n: number = comparator(a, b);
 
@@ -148,12 +144,11 @@ class Sorter<T extends object> implements PipelineOperator<T, T> {
 
 class Projector<T extends object> implements PipelineOperator<T, Partial<T>> {
 
-    constructor(readonly arr: T[],
-                protected readonly projector: Projection<T>) {
+    constructor(protected readonly projector: Projection<T>) {
     }
 
-    get(): Partial<T>[] {
-        return this.arr.map((line: T): Partial<T> => {
+    get(): (arr: T[]) => Partial<T>[] {
+        return arr => arr.map((line: T): Partial<T> => {
             const projectionKeys: (keyof T)[] = Object.keys({ ...this.projector }) as (keyof T)[];
             const partial: Partial<T> = projectionKeys.reduce(
                 (prev: Partial<T>, cur: keyof T): Partial<T> => ({ ...prev, [cur]: line[cur] }),
@@ -162,6 +157,35 @@ class Projector<T extends object> implements PipelineOperator<T, Partial<T>> {
 
             return partial;
         });
+    }
+}
+
+class Pipeline<T extends object = object, R extends object = object> {
+
+    constructor(private arr: T[],
+                private operators: PipelineOperator[] = []) {
+    }
+
+    filter(query: Query<T>, fullTextSearchFieldNames: (keyof T)[]): Pipeline<T, T> {
+        return new Pipeline<T, T>(this.arr, [ ...this.operators, new Filter<T>(query, fullTextSearchFieldNames) ]);
+    }
+
+    sort(sort: Sort<T>): Pipeline<T, T> {
+        return new Pipeline<T, T>(this.arr, [ ...this.operators, new Sorter<T>(sort) ]);
+    }
+
+    project(projector: Projection<T>): Pipeline<T, Partial<T>> {
+        return new Pipeline<T, Partial<T>>(this.arr, [ ...this.operators, new Projector<T>(projector) ]);
+    }
+
+    value(): R[] {
+        let value: T[] = [ ...this.arr ];
+
+        this.operators.forEach((operator: PipelineOperator): void => {
+            value = operator.get()(value);
+        });
+
+        return value;
     }
 }
 
@@ -174,7 +198,7 @@ export class Database<T extends object> {
     async find(query: Query<T>, options?: FindOptions<T>): Promise<Partial<T>[]> {
         return new Promise<Partial<T>[]>((resolve, reject) => {
             try {
-                let lines: T[] = [];
+                let records: T[] = [];
 
                 const readInterface = readline.createInterface({
                     input: fs.createReadStream(this.filename)
@@ -188,26 +212,27 @@ export class Database<T extends object> {
 
                         const dbRecord: T = this.parseLine(line);
 
-                        lines.push(dbRecord);
+                        records.push(dbRecord);
                     } catch (err) {
                         return reject(err);
                     }
                 });
 
                 readInterface.on('close', () => {
-                    lines = [ ...new Filter(lines, query, this.fullTextSearchFieldNames).get() ];
+                    let pipeline = new Pipeline(records)
+                        .filter(query, this.fullTextSearchFieldNames);
 
-                    if (options) {
+                    if (!!options) {
                         if (!!options.sort) {
-                            lines = [ ...new Sorter(lines, options.sort).get() ];
+                            pipeline = pipeline.sort(options.sort);
                         }
 
                         if (!!options.projection) {
-                            return resolve([ ...new Projector(lines, options.projection).get() ]);
+                            pipeline = pipeline.project(options.projection);
                         }
                     }
 
-                    return resolve(lines);
+                    return resolve(pipeline.value());
                 });
             } catch (err) {
                 return reject(err);
