@@ -95,9 +95,9 @@ function logPerson(person: Person) {
     console.log(` - ${chalk.green(person.name)}, ${person.age}, ${additionalInformation}`);
 }
 
-function filterUsers(persons: Person[], criteria: User): User[] {
+function filterUsers(persons: Person[], criteria: { [K in keyof Omit<User, 'type'>]?: Omit<User, 'type'>[K] }): User[] {
     return persons.filter(isUser).filter((user) => {
-        let criteriaKeys = Object.keys(criteria) as (keyof User)[];
+        let criteriaKeys: (keyof Omit<User, 'type'>)[] = Object.keys(criteria) as (keyof Omit<User, 'type'>)[];
         return criteriaKeys.every((fieldName) => {
             return user[fieldName] === criteria[fieldName];
         });
